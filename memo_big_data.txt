@@ -1,0 +1,52 @@
+>>python3 -m venv venv_bigdata
+>>conda activate venv_bigdata/
+>> source venv_bigdata/bin/activat
+>>sudo apt install openjdk-17-jdk
+>>nano ~/.bashrc
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+export PATH=$PATH:$JAVA_HOME/bin
+>>source  ~/.bashrc
+>>pip install pyspark
+
+Remarque:
+Spark est préférable à Pandas lorsque les données sont trop volumineuses pour tenir en mémoire. 
+Pandas est rapide mais limité par la RAM car il charge toutes les données localement. 
+À l’inverse, Spark permet de traiter de grands volumes de données de manière distribuée, ce qui le rend plus adapté aux applications Big Data malgré un temps d’initialisation plus élevé.
+
+
+
+SparkSession
+C'est le point d'entrée de Spark. C'est lui qui démarre le moteur. Sans lui, rien ne fonctionne. Tu en crées un seul par programme.
+
+SparkContext (sc)
+C'est le "chef d'orchestre" qui coordonne les tâches entre les machines. La SparkSession le contient automatiquement (spark.sparkContext).
+
+RDD (Resilient Distributed Dataset)
+C'est la structure de données de base de Spark. C'est une collection d'éléments :
+
+Resilient → tolérant aux pannes, il se reconstruit si une machine tombe
+Distributed → les données sont réparties sur plusieurs machines
+Dataset → c'est juste un ensemble de données
+
+
+Transformations → elles ne s'exécutent pas immédiatement (lazy)
+
+map → applique une fonction à chaque élément
+filter → garde uniquement les éléments qui passent la condition
+reduceByKey → regroupe par clé et applique une réduction
+
+
+Actions → elles déclenchent vraiment le calcul
+
+reduce → combine tous les éléments en un seul résultat
+collect → ramène toutes les données sur la machine principale
+count → compte les éléments
+
+
+Lazy evaluation
+Spark n'exécute rien tant qu'il n'y a pas une action. Les transformations (map, filter...) construisent juste un plan. C'est l'action (reduce, collect...) qui lance tout.
+rdd.filter(...).map(...)   ← rien ne se passe encore
+    .reduce(...)           ← là Spark exécute tout d'un coup
+
+Partition
+Spark découpe le RDD en morceaux appelés partitions. Chaque partition est traitée en parallèle sur un cœur/machine différent.
