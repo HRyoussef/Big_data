@@ -3,7 +3,7 @@ import time
 
 spark = SparkSession.builder \
     .appName("TaxiCluster") \
-    .master("spark://PYTHON-08:7077") \
+    .master("spark://172.22.114.75:7077") \
     .getOrCreate()
 
 print("Master :", spark.sparkContext.master)

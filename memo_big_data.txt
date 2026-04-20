@@ -50,3 +50,496 @@ rdd.filter(...).map(...)   ← rien ne se passe encore
 
 Partition
 Spark découpe le RDD en morceaux appelés partitions. Chaque partition est traitée en parallèle sur un cœur/machine différent.
+
+
+
+######################################################"""""
+installation Spark Standalone
+https://www.apache.org/dyn/closer.lua/spark/spark-4.1.1/spark-4.1.1-bin-hadoop3.tgz
+
+Kit 1 – RDD
+1. C'est quoi Spark ?
+Spark est un moteur de calcul distribué. Il permet de traiter des quantités massives de données réparties sur plusieurs machines.
+Sans Spark (Pandas)          Avec Spark
+──────────────────           ──────────────────────
+1 machine                    N machines
+limité à la RAM              illimité
+séquentiel                   parallèle
+
+2. Les composants clés
+SparkSession  → point d'entrée, démarre le moteur
+SparkContext  → chef d'orchestre des tâches (sc)
+RDD           → structure de données distribuée
+pythonfrom pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("MonApp").getOrCreate()
+sc = spark.sparkContext  # obligatoire pour RDD
+
+3. C'est quoi un RDD ?
+Resilient Distributed Dataset
+Resilient   → tolérant aux pannes (se reconstruit si une machine tombe)
+Distributed → données réparties sur plusieurs machines
+Dataset     → collection de données
+python# Créer un RDD depuis une liste
+rdd = sc.parallelize([1, 2, 3, 4, 5])
+
+# Créer un RDD depuis un fichier
+df = spark.read.parquet("fichier.parquet")
+rdd = df.rdd  # convertir DataFrame en RDD
+
+4. Transformations vs Actions
+Transformations → lazy, ne s'exécutent pas immédiatement :
+pythonrdd.map(lambda x: x * 2)      # applique une fonction à chaque élément
+rdd.filter(lambda x: x > 0)   # garde les éléments qui passent la condition
+rdd.reduceByKey(lambda a, b: a + b)  # regroupe par clé et agrège
+Actions → déclenchent le calcul :
+pythonrdd.collect()   # ramène toutes les données
+rdd.count()     # compte les éléments
+rdd.reduce(lambda a, b: a + b)  # combine tout en un résultat
+Lazy evaluation :
+rdd.filter(...).map(...)   ← rien ne se passe
+    .reduce(...)           ← tout s'exécute ici
+
+5. Exercice Arbres de Paris
+Données :
+pythondf = spark.read.parquet("arbresremarquablesparis.parquet")
+rdd = df.rdd
+Ce qu'il faut retenir — toujours valider les données avant de calculer :
+pythondef annee_valide(row):
+    val = row["com_annee_plantation"]
+    if val is None:
+        return False
+    try:
+        int(val)
+        return True
+    except (ValueError, TypeError):
+        return False
+Q1 – Âge du plus vieil arbre :
+python# filter → map → reduce
+age_max = (
+    rdd
+    .filter(annee_valide)                                    # 1. on filtre
+    .map(lambda r: 2024 - int(r["com_annee_plantation"]))   # 2. on calcule l'âge
+    .reduce(lambda a, b: a if a > b else b)                  # 3. on garde le max
+)
+Q2 – Hauteur moyenne :
+python# filter → map en tuple → reduce → division
+total, count = (
+    rdd
+    .filter(lambda r: r["arbres_hauteurenm"] is not None)
+    .map(lambda r: (float(r["arbres_hauteurenm"]), 1))
+    .reduce(lambda a, b: (a[0]+b[0], a[1]+b[1]))
+)
+moyenne = total / count
+Q3 – Arrondissement avec le plus d'arbres :
+python# filter → map en tuple → reduceByKey → reduce
+arrond_max = (
+    rdd
+    .filter(lambda r: r["arbres_arrondissement"] is not None)
+    .map(lambda r: (r["arbres_arrondissement"], 1))          # (clé, 1)
+    .reduceByKey(lambda a, b: a + b)                         # compte par arrond
+    .reduce(lambda a, b: a if a[1] > b[1] else b)            # garde le max
+)
+
+6. Ce qu'il faut absolument retenir du Kit 1
+✅ SparkSession → obligatoire pour démarrer
+✅ sc = spark.sparkContext → obligatoire pour RDD
+✅ Toujours filter avant map/reduce → évite les crashs
+✅ Transformations = lazy, Actions = déclenchent le calcul
+✅ map      → transformer chaque élément
+✅ filter   → garder certains éléments
+✅ reduce   → combiner en un résultat
+✅ reduceByKey → compter/agréger par groupe
+
+les transformations DataFrame manquantes :
+
+Transformations DataFrame – exemples concrets sur les Arbres
+pythonfrom pyspark.sql import SparkSession
+from pyspark.sql.functions import col, avg, count, round as spark_round, desc
+
+spark = SparkSession.builder.appName("Arbres").getOrCreate()
+df = spark.read.parquet("arbresremarquablesparis.parquet")
+
+groupBy → regroupe les lignes par une colonne
+python# Compter les arbres par arrondissement
+df.groupBy("arbres_arrondissement").count().show(5)
+
+# +--------------------+-----+
+# |arbres_arrondissement|count|
+# +--------------------+-----+
+# |               75016|  120|
+# |               75012|   98|
+# +--------------------+-----+
+
+agg → applique une ou plusieurs fonctions d'agrégation
+python# Hauteur moyenne ET nombre d'arbres par arrondissement en une seule fois
+df.groupBy("arbres_arrondissement") \
+  .agg(
+      count("*").alias("nb_arbres"),
+      spark_round(avg("arbres_hauteurenm"), 2).alias("hauteur_moyenne")
+  ).show(5)
+
+# +--------------------+---------+---------------+
+# |arbres_arrondissement|nb_arbres|hauteur_moyenne|
+# +--------------------+---------+---------------+
+# |               75016|      120|          12.45|
+# +--------------------+---------+---------------+
+
+orderBy / desc → trier les résultats
+python# Arrondissements avec le plus d'arbres en premier
+df.groupBy("arbres_arrondissement") \
+  .count() \
+  .orderBy(desc("count")) \
+  .show(5)
+
+filter / where → filtrer les lignes
+python# Arbres de plus de 20 mètres
+df.filter(col("arbres_hauteurenm") > 20).show(5)
+
+# Equivalent avec where (même chose)
+df.where(col("arbres_hauteurenm") > 20).show(5)
+
+select → choisir les colonnes
+python# Garder uniquement 3 colonnes
+df.select("arbres_genre", "arbres_hauteurenm", "arbres_arrondissement").show(5)
+
+withColumn → ajouter ou modifier une colonne
+pythonfrom pyspark.sql.functions import lit
+
+# Ajouter une colonne âge calculée
+df.withColumn("age", lit(2024) - col("com_annee_plantation")).show(5)
+
+alias → renommer une colonne
+pythondf.select(
+    col("arbres_hauteurenm").alias("hauteur_metres"),
+    col("arbres_arrondissement").alias("arrondissement")
+).show(5)
+
+Ce qu'il faut retenir
+✅ groupBy   → regrouper par colonne (comme GROUP BY en SQL)
+✅ agg       → agréger (avg, count, sum, min, max)
+✅ orderBy   → trier (desc pour décroissant)
+✅ filter    → filtrer les lignes
+✅ select    → choisir les colonnes
+✅ withColumn → ajouter/modifier une colonne
+✅ alias     → renommer une colonne
+La différence clé entre RDD et DataFrame :
+RDD          → map, filter, reduce, reduceByKey  (bas niveau)
+DataFrame    → groupBy, agg, select, filter      (haut niveau, comme SQL)
+
+Kit 2 – DataFrames & Nettoyage
+1. Charger et inspecter les données
+pythonfrom pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("Taxi").getOrCreate()
+
+# Charger le parquet
+df = spark.read.parquet("taxi.parquet")
+
+# Afficher les 5 premières lignes
+df.show(5)
+
+# Afficher le schéma
+df.printSchema()
+
+# Nombre de lignes
+print(df.count())
+Ce qu'il faut retenir :
+✅ spark.read.parquet()  → charger un fichier parquet
+✅ df.show(n)            → afficher n lignes
+✅ df.printSchema()      → voir les types de colonnes
+✅ df.count()            → compter les lignes
+
+2. Analyser les valeurs nulles
+pythonfrom pyspark.sql.functions import col, sum as spark_sum
+
+# Compter les nulls par colonne
+df.select([
+    spark_sum(col(c).isNull().cast("int")).alias(c)
+    for c in df.columns
+]).show(vertical=True)
+Ce qu'il faut retenir :
+isNull()      → détecte les valeurs nulles
+cast("int")   → convertit True/False en 1/0
+sum()         → additionne les 1 → donne le nombre de nulls
+
+3. Stratégie nulls – dropna vs fillna
+python# dropna → supprimer les lignes avec des nulls
+df_clean = df.dropna()
+# ❌ danger → on perd 29% des données ici
+
+# fillna → remplacer par une valeur logique
+df_clean = df.fillna({
+    "passenger_count": 1,       # 1 passager par défaut
+    "RatecodeID": 1,            # tarif standard
+    "store_and_fwd_flag": "N",  # non stocké
+    "congestion_surcharge": 0.0,
+    "Airport_fee": 0.0
+})
+# ✅ on garde toutes les lignes
+Règle de décision :
+Beaucoup de nulls (>10%) → fillna  (on garde les données)
+Peu de nulls (<5%)       → dropna  (on supprime les lignes)
+
+4. Filtrer les valeurs aberrantes
+pythonfrom pyspark.sql.functions import col
+
+df_clean = df_clean.filter(
+    (col("fare_amount") > 0)    & (col("fare_amount") <= 500)   &
+    (col("trip_distance") > 0)  & (col("trip_distance") <= 200)
+)
+Ce qu'il faut retenir :
+valeur aberrante = valeur impossible ou illogique
+ex: fare_amount = -5$  → impossible
+ex: trip_distance = 500 miles → illogique pour un taxi
+
+5. Dédupliquer
+pythondf_clean = df_clean.dropDuplicates()
+
+6. Calculer le pourcentage conservé
+pythontotal    = df.count()
+conserve = df_clean.count()
+print(f"Lignes conservées : {conserve / total * 100:.2f}%")
+
+7. Analyses DataFrame
+pythonfrom pyspark.sql.functions import avg, count, round as spark_round, hour, desc
+
+# Course la plus chère
+df_clean.orderBy(col("fare_amount").desc()).select(
+    "fare_amount", "trip_distance"
+).show(1)
+
+# Montant moyen par type de paiement
+df_clean.groupBy("payment_type") \
+    .agg(spark_round(avg("total_amount"), 2).alias("montant_moyen")) \
+    .orderBy(desc("montant_moyen")) \
+    .show()
+
+# Top 10 zones de prise en charge
+df_clean.groupBy("PULocationID") \
+    .count() \
+    .orderBy(desc("count")) \
+    .show(10)
+
+# Distribution par heure
+df_clean.withColumn("heure", hour("tpep_pickup_datetime")) \
+    .groupBy("heure") \
+    .count() \
+    .orderBy("heure") \
+    .show(24)
+
+8. SparkSQL – vue temporaire
+python# Créer une vue SQL
+df_clean.createOrReplaceTempView("taxi")
+
+# Requête SQL classique
+spark.sql("""
+    SELECT payment_type,
+           ROUND(AVG(total_amount), 2) AS montant_moyen
+    FROM taxi
+    GROUP BY payment_type
+    ORDER BY montant_moyen DESC
+""").show()
+Ce qu'il faut retenir :
+createOrReplaceTempView() → crée une table virtuelle
+spark.sql()               → exécute du SQL classique dessus
+résultat identique à groupBy().agg() mais en SQL
+
+9. Formats CSV vs Parquet
+pythonimport time
+
+# Lire Parquet
+start = time.time()
+df = spark.read.parquet("taxi.parquet")
+df.count()
+print(f"Parquet complet : {time.time()-start:.2f}s")
+
+# Projection 3 colonnes depuis Parquet
+start = time.time()
+spark.read.parquet("taxi.parquet").select(
+    "fare_amount", "trip_distance", "total_amount"
+).count()
+print(f"Parquet 3 colonnes : {time.time()-start:.2f}s")
+Pourquoi Parquet est plus rapide :
+CSV     → stockage par LIGNE  → lit tout même si on veut 3 colonnes
+Parquet → stockage par COLONNE → lit uniquement les colonnes demandées
+
+20 colonnes, on en veut 3 :
+CSV     → lit 100% des données
+Parquet → lit 15% des données  ← 6x moins !
+
+10. Ce qu'il faut absolument retenir du Kit 2
+✅ printSchema()              → voir les types
+✅ isNull() + sum()           → compter les nulls
+✅ fillna({col: valeur})      → remplacer les nulls
+✅ dropna()                   → supprimer les lignes nulles
+✅ filter(col() > x)          → filtrer les aberrants
+✅ dropDuplicates()           → supprimer les doublons
+✅ groupBy().agg()            → agréger par groupe
+✅ orderBy(desc())            → trier décroissant
+✅ withColumn()               → ajouter une colonne
+✅ createOrReplaceTempView()  → vue SQL temporaire
+✅ spark.sql()                → requête SQL sur la vue
+✅ Parquet > CSV              → colonnaire = plus rapide
+
+Kit 3 – Cluster & Partitionnement
+1. Architecture d'un cluster Spark
+┌─────────────────────────────────────┐
+│           MASTER (Driver)           │
+│         172.22.114.75:7077          │
+│  - coordonne les tâches             │
+│  - interface web :8080              │
+└──────────┬──────────────┬───────────┘
+           │              │
+    ┌──────▼──────┐ ┌─────▼───────┐
+    │   WORKER 1  │ │  WORKER 2   │
+    │ 172.22.114.82│ │172.22.114.86│
+    │ - exécute   │ │ - exécute   │
+    │ - calcule   │ │ - calcule   │
+    └─────────────┘ └─────────────┘
+Ce qu'il faut retenir :
+Master  → chef d'orchestre, ne calcule pas
+Worker  → fait le vrai travail en parallèle
+Driver  → ton script Python (tourne sur le Master)
+Executor→ processus Java sur chaque Worker
+
+2. Démarrer le cluster
+bash# Sur le Master
+export SPARK_LOCAL_IP=172.22.114.75
+$SPARK_HOME/sbin/start-master.sh
+
+# Sur chaque Worker
+export SPARK_LOCAL_IP=<ip-du-worker>
+$SPARK_HOME/sbin/start-worker.sh spark://172.22.114.75:7077
+
+# Vérifier
+jps
+# Master
+# Worker
+
+# Interface web
+http://172.22.114.75:8080
+
+3. Soumettre un job avec spark-submit
+bashspark-submit \
+  --master spark://172.22.114.75:7077 \
+  --executor-memory 2g \
+  --executor-cores 2 \
+  mon_script.py
+Ce qu'il faut retenir :
+spark-submit       → lance un script sur le cluster
+--master           → adresse du Master
+--executor-memory  → RAM par Worker
+--executor-cores   → CPU par Worker
+
+4. Problème fichier partagé
+Mode local          → Spark lit le fichier sur ta machine ✅
+Mode cluster simple → Driver lit, distribue les données ✅
+Mode cluster complexe (groupBy) → Workers lisent eux-mêmes ❌
+                                   fichier absent sur les Workers
+Solution en production :
+HDFS  → système de fichiers distribué Hadoop
+S3    → stockage cloud Amazon
+NFS   → dossier réseau partagé
+Solution en cours :
+bash# Serveur HTTP temporaire
+python3 -m http.server 8888
+
+# Workers téléchargent le fichier
+wget http://172.22.114.75:8888/taxi.parquet
+
+5. Local vs Cluster – quand utiliser quoi ?
+Mode local[*]          Mode cluster
+──────────────         ──────────────────
+1 machine              N machines
+données locales        données partagées
+développement          production
+< 10 GB                > 100 GB
+Résultat observé chez toi :
+Job simple (count) :
+  Local   → 6s   ← plus rapide !
+  Cluster → 7s
+
+Pourquoi ? overhead réseau > gain parallélisme sur fichier local
+
+6. Partitionnement
+C'est quoi une partition ?
+RDD/DataFrame découpé en morceaux → chaque morceau = 1 partition
+Chaque partition traitée en parallèle sur 1 core
+python# Voir le nombre de partitions
+print(rdd.getNumPartitions())
+
+# repartition → shuffle complet (redistribution totale)
+rdd_repart = rdd.repartition(16)
+# → flèche ORANGE dans le DAG
+# → données déplacées entre toutes les partitions
+# → lent mais équilibré
+
+# coalesce → fusion simple (pas de shuffle)
+rdd_coal = rdd.coalesce(4)
+# → flèche BLEUE dans le DAG
+# → partitions juste fusionnées
+# → rapide mais peut être déséquilibré
+Règle :
+repartition → pour AUGMENTER les partitions ou rééquilibrer
+coalesce    → pour DIMINUER les partitions sans overhead
+
+7. Impact du nombre de partitions
+Trop peu de partitions  → sous-utilisation des cores
+                          ex: 2 partitions sur 16 cores → 14 cores inutilisés
+
+Trop de partitions      → overhead de coordination
+                          ex: 1000 partitions sur 16 cores → trop de scheduling
+
+Optimal                 → 2-4x le nombre de cores
+                          ex: 16 cores → 32 à 64 partitions
+
+8. Montée en charge
+python# Simuler des volumes croissants
+df_1mois  = df                              # ~3.7M lignes
+df_3mois  = df.union(df).union(df)          # ~11M lignes
+df_6mois  = df_3mois.union(df_3mois)        # ~22M lignes
+df_12mois = df_6mois.union(df_6mois)        # ~44M lignes
+Types de montée en charge :
+Sub-linéaire   → cluster scale bien
+                 doubler le volume < doubler le temps ✅
+
+Linéaire       → proportionnel
+                 doubler le volume = doubler le temps
+
+Supra-linéaire → goulot d'étranglement
+                 doubler le volume > doubler le temps ❌
+                 → manque de RAM, trop de shuffle
+
+9. Optimisations possibles
+python# 1. Mettre en cache un RDD réutilisé
+rdd.cache()        # garde en RAM
+rdd.persist()      # options (RAM, disque, les deux)
+
+# 2. Bon nombre de partitions
+rdd.repartition(32)  # 2x les cores disponibles
+
+# 3. Utiliser Parquet plutôt que CSV
+spark.read.parquet("fichier.parquet")  # lecture colonnaire
+
+# 4. Filtrer tôt (pushdown)
+df.filter(col("fare_amount") > 0)  # avant le groupBy
+  .groupBy(...)
+
+10. Ce qu'il faut absolument retenir du Kit 3
+✅ Master         → coordonne, interface :8080
+✅ Worker         → calcule, se connecte au Master
+✅ spark-submit   → lance un job en production
+✅ SPARK_LOCAL_IP → évite les erreurs de loopback
+✅ getNumPartitions() → voir les partitions
+✅ repartition()  → shuffle, rééquilibre, lent
+✅ coalesce()     → pas de shuffle, fusionne, rapide
+✅ Optimal        → 2-4x le nombre de cores
+✅ cache/persist  → évite de recalculer
+✅ Filtrer tôt    → réduit le volume avant les opérations lourdes
+✅ Fichier partagé → obligatoire pour jobs complexes en cluster
+
+Récapitulatif des 3 kits :
+Kit 1 → RDD          : map, filter, reduce, reduceByKey
+Kit 2 → DataFrame    : groupBy, agg, fillna, dropna, SQL
+Kit 3 → Cluster      : Master/Worker, partitions, montée en charge
